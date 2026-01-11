@@ -116,6 +116,47 @@ CORS(app)  # Enable CORS for Next.js frontend
 jobs = {}
 jobs_lock = threading.Lock()
 
+def _now_ts() -> float:
+    return time.time()
+
+def _downloads_root() -> str:
+    # Persist downloads outside python-api/ to make preview possible across requests
+    return os.path.realpath(os.path.join(os.path.dirname(__file__), '..', 'downloads'))
+
+def _is_allowed_video_path(filepath: str) -> bool:
+    """Allow serving only temp files or files within the repo downloads dir."""
+    fp = os.path.realpath(filepath)
+    return (
+        fp.startswith('/tmp/')
+        or fp.startswith('/var/tmp/')
+        or fp.startswith(_downloads_root() + os.sep)
+    )
+
+def _job_elapsed_seconds(job: dict) -> float | None:
+    started = job.get('started_at_ts') or job.get('created_at_ts')
+    if not started:
+        return None
+    end = job.get('updated_at_ts') or _now_ts()
+    try:
+        return max(0.0, float(end) - float(started))
+    except Exception:
+        return None
+
+def _job_eta_seconds(job: dict) -> float | None:
+    """Estimate remaining time based on elapsed/progress ratio."""
+    progress = job.get('progress', 0)
+    try:
+        progress_f = float(progress)
+    except Exception:
+        return None
+    if progress_f <= 0 or progress_f >= 100:
+        return None
+    elapsed = _job_elapsed_seconds(job)
+    if elapsed is None:
+        return None
+    # Simple linear ETA: elapsed/progress * remaining_progress
+    return max(0.0, (elapsed / progress_f) * (100.0 - progress_f))
+
 # Import ClipsAI after ensuring it's available
 try:
     from clipsai import ClipFinder, Transcriber
@@ -141,6 +182,42 @@ def health():
         'yt_dlp_available': YT_DLP_AVAILABLE
     })
 
+@app.route('/jobs', methods=['GET'])
+def list_jobs():
+    """List processing jobs (most recent first)"""
+    limit_raw = request.args.get('limit', '50')
+    try:
+        limit = max(1, min(200, int(limit_raw)))
+    except Exception:
+        limit = 50
+
+    with jobs_lock:
+        # Sort by created_at_ts (fallback to created_at string)
+        items = list(jobs.items())
+        items.sort(key=lambda kv: kv[1].get('created_at_ts') or kv[1].get('created_at') or '', reverse=True)
+        items = items[:limit]
+
+        summaries = []
+        for job_id, job in items:
+            elapsed = _job_elapsed_seconds(job)
+            eta = _job_eta_seconds(job)
+            summaries.append({
+                'job_id': job_id,
+                'status': job.get('status'),
+                'progress': job.get('progress', 0),
+                'message': job.get('message', ''),
+                'error': job.get('error'),
+                'created_at': job.get('created_at'),
+                'updated_at': job.get('updated_at'),
+                'elapsed_seconds': elapsed,
+                'eta_seconds': eta,
+                'max_duration': job.get('max_duration'),
+                'url': job.get('url'),
+                'video': job.get('video'),
+            })
+
+        return jsonify({'jobs': summaries})
+
 
 @app.route('/jobs/<job_id>/status', methods=['GET'])
 def get_job_status(job_id):
@@ -149,16 +226,29 @@ def get_job_status(job_id):
         job = jobs.get(job_id)
         if not job:
             return jsonify({'error': 'Job not found'}), 404
-        
-        return jsonify({
+        elapsed = _job_elapsed_seconds(job)
+        eta = _job_eta_seconds(job)
+
+        payload = {
             'job_id': job_id,
-            'status': job['status'],
+            'status': job.get('status'),
             'progress': job.get('progress', 0),
             'message': job.get('message', ''),
             'error': job.get('error'),
             'created_at': job.get('created_at'),
             'updated_at': job.get('updated_at'),
-        })
+            'elapsed_seconds': elapsed,
+            'eta_seconds': eta,
+            'max_duration': job.get('max_duration'),
+            'url': job.get('url'),
+            'video': job.get('video'),
+        }
+
+        # When completed, include result directly in status (requested by frontend)
+        if job.get('status') == 'completed':
+            payload['result'] = job.get('result', {})
+
+        return jsonify(payload)
 
 
 @app.route('/jobs/<job_id>/result', methods=['GET'])
@@ -186,14 +276,24 @@ def update_job_status(job_id, status, progress=0, message='', error=None):
             jobs[job_id]['progress'] = progress
             jobs[job_id]['message'] = message
             jobs[job_id]['updated_at'] = datetime.now().isoformat()
+            jobs[job_id]['updated_at_ts'] = _now_ts()
             if error:
                 jobs[job_id]['error'] = error
+
+def update_job_fields(job_id, fields: dict):
+    """Patch job with extra fields without overwriting status/progress/message."""
+    with jobs_lock:
+        if job_id in jobs:
+            jobs[job_id].update(fields)
+            jobs[job_id]['updated_at'] = datetime.now().isoformat()
+            jobs[job_id]['updated_at_ts'] = _now_ts()
 
 
 def process_youtube_async(job_id, url, max_duration=30.0):
     """Process YouTube video asynchronously"""
-    download_temp_dir = tempfile.mkdtemp(prefix='yt-process-')
-    
+    downloads_root = _downloads_root()
+    os.makedirs(downloads_root, exist_ok=True)
+    download_dir = tempfile.mkdtemp(prefix='yt-process-', dir=downloads_root)
     try:
         update_job_status(job_id, 'processing', 10, 'Downloading video from YouTube...')
         
@@ -207,25 +307,52 @@ def process_youtube_async(job_id, url, max_duration=30.0):
             info = ydl.extract_info(url, download=False)
             video_title = info.get('title', 'Downloaded Video')
             duration = info.get('duration', 0)
+            thumbnail = info.get('thumbnail')
+
+        update_job_fields(job_id, {
+            'video': {
+                'title': video_title,
+                'duration': duration,
+                'thumbnail': thumbnail,
+                'path': None,
+            }
+        })
         
         safe_title = "".join(c for c in video_title if c.isalnum() or c in (' ', '-', '_')).rstrip()
         safe_title = safe_title[:100]
         
+        def _download_progress_hook(d):
+            try:
+                status = d.get('status')
+                if status != 'downloading':
+                    return
+                downloaded = d.get('downloaded_bytes') or 0
+                total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
+                if total:
+                    pct = float(downloaded) / float(total)
+                    # map download progress to 10..35
+                    prog = int(10 + pct * 25)
+                    update_job_status(job_id, 'processing', max(10, min(35, prog)), 'Downloading video from YouTube...')
+            except Exception:
+                # Never break the download due to hook issues
+                return
+
         ydl_opts = {
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            'outtmpl': os.path.join(download_temp_dir, f'{safe_title}.%(ext)s'),
+            'outtmpl': os.path.join(download_dir, f'{safe_title}.%(ext)s'),
             'quiet': False,
+            'progress_hooks': [_download_progress_hook],
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         
         # Find downloaded file
-        files = os.listdir(download_temp_dir)
+        files = os.listdir(download_dir)
         video_file = None
         for f in files:
             if f.endswith(('.mp4', '.webm', '.mkv')):
-                video_file = os.path.join(download_temp_dir, f)
+                video_file = os.path.join(download_dir, f)
                 break
         
         if not video_file:
@@ -234,6 +361,15 @@ def process_youtube_async(job_id, url, max_duration=30.0):
         
         file_size = os.path.getsize(video_file)
         video_id = f'youtube-{os.urandom(8).hex()}'
+
+        update_job_fields(job_id, {
+            'video': {
+                'title': video_title,
+                'duration': duration,
+                'thumbnail': thumbnail,
+                'path': video_file,
+            }
+        })
         
         # Step 2: Generate clips
         update_job_status(job_id, 'processing', 40, 'Transcribing video with ClipsAI...')
@@ -315,7 +451,7 @@ def process_youtube_async(job_id, url, max_duration=30.0):
                 'transcription': transcription_text
             },
             'temp_video_path': video_file,
-            'temp_dir': download_temp_dir,
+            'temp_dir': download_dir,
         }
         
         with jobs_lock:
@@ -328,8 +464,8 @@ def process_youtube_async(job_id, url, max_duration=30.0):
         print(f"Error processing YouTube video: {error_trace}", file=sys.stderr)
         
         # Cleanup on error
-        if os.path.exists(download_temp_dir):
-            shutil.rmtree(download_temp_dir, ignore_errors=True)
+        if os.path.exists(download_dir):
+            shutil.rmtree(download_dir, ignore_errors=True)
         
         update_job_status(job_id, 'failed', 0, f'Error: {str(e)}', str(e))
 
@@ -341,10 +477,9 @@ def serve_video(filepath):
     from urllib.parse import unquote
     filepath = unquote(filepath)
     
-    # Security: only serve files from temp directories
-    # Allow /tmp/ paths and paths containing 'tmp' (for tempfile.mkdtemp paths)
-    if not (filepath.startswith('/tmp/') or 'tmp' in filepath or filepath.startswith('/var/tmp/')):
-        return jsonify({'error': 'Invalid file path - only temp files allowed'}), 403
+    # Security: only serve files from temp directories or repo downloads dir
+    if not _is_allowed_video_path(filepath):
+        return jsonify({'error': 'Invalid file path'}), 403
     
     if not os.path.exists(filepath):
         return jsonify({'error': f'File not found: {filepath}'}), 404
@@ -759,4 +894,8 @@ def process_youtube_sync():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    # IMPORTANT: disable the auto-reloader.
+    # The Flask reloader restarts the process on file changes, which kills in-memory jobs/threads
+    # and breaks long-running downloads/transcriptions.
+    debug = os.environ.get('FLASK_DEBUG', '0') == '1'
+    app.run(host='0.0.0.0', port=port, debug=debug, use_reloader=False)

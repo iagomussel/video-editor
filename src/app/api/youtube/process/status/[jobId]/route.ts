@@ -20,7 +20,16 @@ export async function GET(
             method: 'GET',
         });
 
-        return NextResponse.json(status);
+        // If Python already downloaded a video file, expose a same-origin preview URL
+        const videoPath = status?.video?.path;
+        const enriched = {
+            ...status,
+            preview_url: videoPath
+                ? `/api/youtube/process/preview?path=${encodeURIComponent(videoPath)}`
+                : null,
+        };
+
+        return NextResponse.json(enriched);
     } catch (error: any) {
         console.error('Error getting job status:', error);
         

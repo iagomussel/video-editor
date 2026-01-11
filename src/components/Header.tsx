@@ -27,6 +27,32 @@ export function Header({ setInterval }: { setInterval: SetState<Interval> }) {
     const [showVideoSelector, setShowVideoSelector] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [processingStatus, setProcessingStatus] = useState('');
+    const [processingPreviewUrl, setProcessingPreviewUrl] = useState<string | null>(null);
+    const [jobs, setJobs] = useState<any[]>([]);
+    const [jobsError, setJobsError] = useState<string | null>(null);
+
+    const formatEta = (seconds: any) => {
+        if (typeof seconds !== 'number' || !isFinite(seconds) || seconds <= 0) return '';
+        const s = Math.round(seconds);
+        const m = Math.floor(s / 60);
+        const r = s % 60;
+        return `${m}:${String(r).padStart(2, '0')}`;
+    };
+
+    const loadJobs = async () => {
+        try {
+            setJobsError(null);
+            const res = await fetch('/api/youtube/process/list?limit=20', { method: 'GET' });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error || 'Failed to list jobs');
+            }
+            const data = await res.json();
+            setJobs(Array.isArray(data.jobs) ? data.jobs : []);
+        } catch (e: any) {
+            setJobsError(e.message || 'Failed to list jobs');
+        }
+    };
 
     const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
@@ -89,6 +115,7 @@ export function Header({ setInterval }: { setInterval: SetState<Interval> }) {
 
         setIsProcessing(true);
         setProcessingStatus('Iniciando processamento...');
+        setProcessingPreviewUrl(null);
 
         try {
             // Step 1: Start async processing (clips will be filtered to < 30 seconds)
@@ -109,6 +136,7 @@ export function Header({ setInterval }: { setInterval: SetState<Interval> }) {
             }
 
             const { job_id } = await startResponse.json();
+            await loadJobs();
             
             // Step 2: Poll for status
             const pollStatus = async (): Promise<void> => {
@@ -133,7 +161,11 @@ export function Header({ setInterval }: { setInterval: SetState<Interval> }) {
                         
                         // Update status message
                         if (status.message) {
-                            setProcessingStatus(`${status.message} (${status.progress}%)`);
+                            const eta = formatEta(status.eta_seconds);
+                            setProcessingStatus(`${status.message} (${status.progress}%)${eta ? ` • ETA ${eta}` : ''}`);
+                        }
+                        if (status.preview_url) {
+                            setProcessingPreviewUrl(status.preview_url);
                         }
                         
                         if (status.status === 'completed') {
@@ -163,11 +195,13 @@ export function Header({ setInterval }: { setInterval: SetState<Interval> }) {
                             setProcessingStatus('Complete!');
                             setShowYoutubeInput(false);
                             setYoutubeUrl('');
+                            await loadJobs();
                             
                             // Clear status after a moment
                             setTimeout(() => {
                                 setProcessingStatus('');
                                 setIsProcessing(false);
+                                setProcessingPreviewUrl(null);
                             }, 2000);
                         } else if (status.status === 'failed') {
                             throw new Error(status.error || status.message || 'Processing failed');
@@ -208,13 +242,18 @@ export function Header({ setInterval }: { setInterval: SetState<Interval> }) {
             }
             setProcessingStatus('');
             setIsProcessing(false);
+            setProcessingPreviewUrl(null);
         }
     };
 
     const handleYoutubeClick = () => {
-        setShowYoutubeInput(!showYoutubeInput);
-        if (showYoutubeInput) {
+        const next = !showYoutubeInput;
+        setShowYoutubeInput(next);
+        if (next) {
+            void loadJobs();
+        } else {
             setYoutubeUrl('');
+            setProcessingPreviewUrl(null);
         }
     };
 
@@ -283,6 +322,17 @@ export function Header({ setInterval }: { setInterval: SetState<Interval> }) {
                                     {processingStatus}
                                 </p>
                             )}
+                            {processingPreviewUrl && (
+                                <div className="border border-gray-200 dark:border-white/10 rounded-md overflow-hidden">
+                                    <video
+                                        src={processingPreviewUrl}
+                                        controls
+                                        muted
+                                        playsInline
+                                        className="w-full max-h-40 bg-black"
+                                    />
+                                </div>
+                            )}
                             <button
                                 type="submit"
                                 disabled={isProcessing || !youtubeUrl.trim()}
@@ -292,6 +342,59 @@ export function Header({ setInterval }: { setInterval: SetState<Interval> }) {
                             >
                                 {isProcessing ? 'Processing...' : 'Process Video'}
                             </button>
+
+                            <div className="pt-2 border-t border-gray-200 dark:border-white/10">
+                                <div className="flex items-center justify-between">
+                                    <p className="text-xs font-medium text-gray-700 dark:text-gray-200">Jobs</p>
+                                    <button
+                                        type="button"
+                                        onClick={() => void loadJobs()}
+                                        className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                                    >
+                                        Atualizar
+                                    </button>
+                                </div>
+                                {jobsError && (
+                                    <p className="text-xs text-red-600 dark:text-red-400 mt-1">
+                                        {jobsError}
+                                    </p>
+                                )}
+                                <div className="max-h-64 overflow-auto mt-2 space-y-2">
+                                    {jobs.length === 0 && (
+                                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                                            Nenhum job ainda.
+                                        </p>
+                                    )}
+                                    {jobs.map((j) => (
+                                        <div
+                                            key={j.job_id}
+                                            className="p-2 rounded border border-gray-200 dark:border-white/10"
+                                        >
+                                            <div className="flex items-start justify-between gap-2">
+                                                <div className="min-w-0">
+                                                    <p className="text-xs font-medium text-gray-900 dark:text-white truncate">
+                                                        {j?.video?.title || j?.url || j.job_id}
+                                                    </p>
+                                                    <p className="text-[11px] text-gray-600 dark:text-gray-300">
+                                                        {j.status} • {j.progress}%{j.eta_seconds ? ` • ETA ${formatEta(j.eta_seconds)}` : ''}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                            {j.preview_url && (
+                                                <div className="mt-2 border border-gray-200 dark:border-white/10 rounded overflow-hidden">
+                                                    <video
+                                                        src={j.preview_url}
+                                                        controls
+                                                        muted
+                                                        playsInline
+                                                        className="w-full max-h-32 bg-black"
+                                                    />
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
                         </form>
                     )}
                     <button
