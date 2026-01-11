@@ -39,7 +39,7 @@ export const ResizerContext = createContext<ResizerContextType>({
     setCrops: async () => undefined,
     resizeLeft: 0,
     setResizeLeft: () => { },
-    resizeMode: "9:16",
+    resizeMode: "16:9",
     setResizeMode: () => { },
     segments: [],
     setSegments: () => { },
@@ -78,7 +78,8 @@ export function ResizerProvider({ children }: { children: ReactNode }) {
             ? (crops_data.segments[i].x / crops_data.original_width) * 100
             : 0
     );
-    const [resizeMode, setResizeMode] = useState<ResizeMode>("9:16");
+    // Default to 16:9 for a simpler, more predictable experience.
+    const [resizeMode, setResizeMode] = useState<ResizeMode>("16:9");
     
     const resizeContext = {
         crops, setCrops,
