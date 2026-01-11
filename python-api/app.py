@@ -119,6 +119,85 @@ jobs_lock = threading.Lock()
 def _now_ts() -> float:
     return time.time()
 
+def _get_word_text(word) -> str:
+    """Best-effort extraction of word/token text from various WhisperX/ClipsAI word objects."""
+    for k in ('word', 'text', 'token', 'value'):
+        try:
+            v = getattr(word, k)
+        except Exception:
+            v = None
+        if isinstance(v, str) and v.strip():
+            return v
+    # Some libs store it as dict
+    if isinstance(word, dict):
+        for k in ('word', 'text', 'token', 'value'):
+            v = word.get(k)
+            if isinstance(v, str) and v.strip():
+                return v
+    return ''
+
+def _reconstruct_transcription_from_words(words) -> str:
+    """
+    Reconstruct a transcription string that matches start_char/end_char indices.
+    If we have start_char/end_char for words, we place each token into a char buffer.
+    """
+    if not words:
+        return ''
+
+    spans = []
+    for w in words:
+        try:
+            start = int(getattr(w, 'start_char', 0) if not isinstance(w, dict) else w.get('start_char', 0))
+            end = int(getattr(w, 'end_char', 0) if not isinstance(w, dict) else w.get('end_char', 0))
+        except Exception:
+            start, end = 0, 0
+        token = _get_word_text(w)
+        if end > start and token:
+            spans.append((start, end, token))
+
+    if spans:
+        max_end = max(e for _, e, _ in spans)
+        buf = [' '] * max_end
+        for start, end, token in spans:
+            width = max(0, end - start)
+            if width == 0:
+                continue
+            # Fit token into span; if shorter, keep remaining as spaces.
+            token_slice = token[:width]
+            for i, ch in enumerate(token_slice):
+                idx = start + i
+                if 0 <= idx < len(buf):
+                    buf[idx] = ch
+        return ''.join(buf).rstrip()
+
+    # Fallback: join tokens with spaces (won't match char spans, but better than empty)
+    tokens = [_get_word_text(w) for w in words]
+    tokens = [t for t in tokens if t]
+    return ' '.join(tokens).strip()
+
+def _extract_transcription_text(transcription) -> str:
+    """Best-effort extraction of transcription text from ClipsAI/WhisperX outputs."""
+    # dict-like
+    if isinstance(transcription, dict):
+        for k in ('transcription', 'text', 'transcript', 'transcription_text'):
+            v = transcription.get(k)
+            if isinstance(v, str) and v.strip():
+                return v
+        words = transcription.get('words') or []
+        return _reconstruct_transcription_from_words(words)
+
+    # object-like
+    for attr in ('transcription', 'text', 'transcript', 'transcription_text'):
+        try:
+            v = getattr(transcription, attr, None)
+        except Exception:
+            v = None
+        if isinstance(v, str) and v.strip():
+            return v
+
+    words = getattr(transcription, 'words', None) or []
+    return _reconstruct_transcription_from_words(words)
+
 def _downloads_root() -> str:
     # Persist downloads outside python-api/ to make preview possible across requests
     return os.path.realpath(os.path.join(os.path.dirname(__file__), '..', 'downloads'))
@@ -382,7 +461,7 @@ def process_youtube_async(job_id, url, max_duration=30.0):
         
         # Convert clips to JSON format and filter by duration
         clips_data = []
-        transcription_text = getattr(transcription, 'transcription', '')
+        transcription_text = _extract_transcription_text(transcription)
         # Get max_duration from job settings (default 30 seconds)
         with jobs_lock:
             max_clip_duration = jobs.get(job_id, {}).get('max_duration', max_duration)
@@ -424,6 +503,7 @@ def process_youtube_async(job_id, url, max_duration=30.0):
                     'end_char': int(getattr(word, 'end_char', 0)),
                     'start_time': float(getattr(word, 'start_time', 0)),
                     'end_time': float(getattr(word, 'end_time', 0)),
+                    'text': _get_word_text(word),
                 })
         
         update_job_status(job_id, 'processing', 95, 'Finalizing...')
@@ -476,6 +556,11 @@ def serve_video(filepath):
     # Decode URL-encoded path
     from urllib.parse import unquote
     filepath = unquote(filepath)
+
+    # Some clients/proxies end up dropping the leading "/" from absolute paths
+    # (e.g. "/home/..." becomes "home/..."). Normalize to an absolute path.
+    if filepath and not filepath.startswith('/'):
+        filepath = '/' + filepath
     
     # Security: only serve files from temp directories or repo downloads dir
     if not _is_allowed_video_path(filepath):
@@ -610,7 +695,7 @@ def generate_clips():
         
         # Convert clips to JSON format
         clips_data = []
-        transcription_text = getattr(transcription, 'transcription', '')
+        transcription_text = _extract_transcription_text(transcription)
         
         for i, clip in enumerate(clips):
             start_char = getattr(clip, 'start_char', 0)
@@ -644,6 +729,7 @@ def generate_clips():
                     'end_char': int(getattr(word, 'end_char', 0)),
                     'start_time': float(getattr(word, 'start_time', 0)),
                     'end_time': float(getattr(word, 'end_time', 0)),
+                    'text': _get_word_text(word),
                 })
         
         # Get video duration
@@ -812,7 +898,7 @@ def process_youtube_sync():
         
         # Convert clips to JSON format
         clips_data = []
-        transcription_text = getattr(transcription, 'transcription', '')
+        transcription_text = _extract_transcription_text(transcription)
         
         for i, clip in enumerate(clips):
             start_char = getattr(clip, 'start_char', 0)
@@ -845,6 +931,7 @@ def process_youtube_sync():
                     'end_char': int(getattr(word, 'end_char', 0)),
                     'start_time': float(getattr(word, 'start_time', 0)),
                     'end_time': float(getattr(word, 'end_time', 0)),
+                    'text': _get_word_text(word),
                 })
         
         # Read video file and return as base64 (for small files) or save to persistent storage

@@ -43,6 +43,59 @@ export function YouTubeImportPanel() {
     const activeJobIdRef = useRef<string | null>(null);
     const pollTimerRef = useRef<number | null>(null);
 
+    const loadJobIntoEditor = async (job: Job) => {
+        try {
+            // Best experience: if completed, use the result endpoint (it copies to /api/video/:id)
+            if (job.status === 'completed') {
+                setBusy(true);
+                setStatusText('Carregando resultado…');
+                const res = await fetch(`/api/youtube/process/result/${job.job_id}`);
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.error || 'Failed to load job result');
+                }
+                const data = await res.json();
+                setVideo(data.video);
+                setClips(data.video?.clips || []);
+                if (data.transcript) setTranscript(data.transcript);
+                setStatusText('');
+                return;
+            }
+
+            // If not completed yet but we have a preview, load it as a temporary video
+            if (job.preview_url) {
+                const title = job?.video?.title || `Job ${job.job_id}`;
+                const duration = job?.video?.duration || 0;
+                const tempVideo: Video = {
+                    id: `job-${job.job_id}`,
+                    object: 'video',
+                    clips: [],
+                    created: Math.floor(Date.now() / 1000),
+                    metadata: {
+                        duration,
+                        file_size: 0,
+                        mime_type: 'video/mp4',
+                    },
+                    source: job.preview_url,
+                    status: 'processing',
+                    title,
+                };
+                setVideo(tempVideo);
+                setClips([]);
+                // keep transcript unchanged (or clear). We'll clear for clarity.
+                setTranscript((draft: Transcript) => {
+                    draft.transcription = '';
+                    draft.words = [];
+                });
+            }
+        } catch (e: any) {
+            alert(`Erro: ${e.message || 'Falha ao carregar job'}`);
+        } finally {
+            setBusy(false);
+            if (statusText === 'Carregando resultado…') setStatusText('');
+        }
+    };
+
     const loadJobs = async () => {
         try {
             setJobsError(null);
@@ -206,19 +259,26 @@ export function YouTubeImportPanel() {
                         <p className="text-xs text-gray-600 dark:text-gray-400">Nenhum job ainda.</p>
                     ) : (
                         jobs.map((j) => (
-                            <div key={j.job_id} className="rounded-md border border-gray-200 dark:border-white/10 p-2">
+                            <button
+                                key={j.job_id}
+                                type="button"
+                                onClick={() => void loadJobIntoEditor(j)}
+                                className="w-full text-left rounded-md border border-gray-200 dark:border-white/10 p-2 hover:bg-gray-50 dark:hover:bg-white/5"
+                            >
                                 <p className="text-xs font-medium text-gray-900 dark:text-white truncate">
                                     {j?.video?.title || j.job_id}
                                 </p>
                                 <p className="text-[11px] text-gray-600 dark:text-gray-400 mt-0.5">
                                     {j.status} • {j.progress}%{j.eta_seconds ? ` • ETA ${formatEta(j.eta_seconds)}` : ''}
+                                    {j.status === 'completed' ? ' • Clique para carregar' : ''}
+                                    {j.preview_url && j.status !== 'completed' ? ' • Clique para preview' : ''}
                                 </p>
                                 {j.preview_url && (
                                     <div className="mt-2 rounded overflow-hidden border border-gray-200 dark:border-white/10">
                                         <video src={j.preview_url} controls muted playsInline className="w-full max-h-28 bg-black" />
                                     </div>
                                 )}
-                            </div>
+                            </button>
                         ))
                     )}
                 </div>
