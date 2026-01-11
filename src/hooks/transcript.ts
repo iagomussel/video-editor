@@ -23,18 +23,22 @@ export function useTranscript() {
         trimStartTime: number,
         trimEndTime: number
     ) => {
-        if (!transcript.words.length) return;
+        if (!transcript.words || transcript.words.length === 0) return;
 
         let index = getWordIndexByTime(startTime, transcript.words);
+        if (index < 0 || index >= transcript.words.length) index = 0;
         const startWord = transcript.words[index];
 
         index = getWordIndexByTime(endTime, transcript.words);
+        if (index < 0 || index >= transcript.words.length) index = transcript.words.length - 1;
         const endWord = transcript.words[index];
 
         index = getWordIndexByTime(trimStartTime, transcript.words);
+        if (index < 0 || index >= transcript.words.length) index = 0;
         const midStartWord = transcript.words[index];
 
         index = getWordIndexByTime(trimEndTime, transcript.words);
+        if (index < 0 || index >= transcript.words.length) index = transcript.words.length - 1;
         const midEndWord = transcript.words[index];
 
         setTranscriptState(
@@ -70,11 +74,19 @@ export function useTranscript() {
     }
 
     const updateCurrentWord = (currentTime: number) => {
+        if (!transcript.words || transcript.words.length === 0) {
+            return;
+        }
+        
         const wordIndex = getWordIndexByTime(
             currentTime,
             transcript.words
         );
-        setCurrentWordIndex(wordIndex);
+        
+        // Ensure index is valid
+        if (wordIndex >= 0 && wordIndex < transcript.words.length) {
+            setCurrentWordIndex(wordIndex);
+        }
     }
 
     return {

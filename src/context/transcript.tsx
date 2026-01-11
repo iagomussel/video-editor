@@ -1,5 +1,5 @@
 // React
-import { ReactNode, createContext, useState } from 'react'
+import { ReactNode, createContext, useState, useEffect } from 'react'
 
 // Data
 import { transcript as transcript_data } from '@/data/transcript'
@@ -45,7 +45,9 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
 
     const [transcript, setTranscript] = useImmer<Transcript>(transcript_data);
     const [currentWordIndex, setCurrentWordIndex] = useState<number>(
-        getWordIndexByChar(clip.start_char, transcript.words)
+        transcript.words && transcript.words.length > 0
+            ? getWordIndexByChar(clip.start_char, transcript.words)
+            : 0
     );
     const [startTranscript, setStartTranscript] = useImmer<ClipTranscript>({
         startChar: clip.start_char,
@@ -62,6 +64,42 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
         endChar: clip.end_char,
         text: transcript_data.transcription.substring(clip.end_char, clip.end_char)
     });
+
+    // Update transcript-related state when clip changes
+    useEffect(() => {
+        if (!transcript.words || transcript.words.length === 0) {
+            setCurrentWordIndex(0);
+            return;
+        }
+        
+        const newCurrentWordIndex = getWordIndexByChar(clip.start_char, transcript.words);
+        // Ensure index is valid
+        if (newCurrentWordIndex >= 0 && newCurrentWordIndex < transcript.words.length) {
+            setCurrentWordIndex(newCurrentWordIndex);
+        } else {
+            setCurrentWordIndex(0);
+        }
+        
+        const transcription = transcript.transcription || '';
+        
+        setStartTranscript((draft: ClipTranscript) => {
+            draft.startChar = clip.start_char;
+            draft.endChar = clip.start_char;
+            draft.text = transcription.substring(draft.startChar, draft.endChar);
+        });
+        
+        setMidTranscript((draft: ClipTranscript) => {
+            draft.startChar = clip.start_char;
+            draft.endChar = clip.end_char;
+            draft.text = transcription.substring(draft.startChar, draft.endChar);
+        });
+        
+        setEndTranscript((draft: ClipTranscript) => {
+            draft.startChar = clip.end_char;
+            draft.endChar = clip.end_char;
+            draft.text = transcription.substring(draft.startChar, draft.endChar);
+        });
+    }, [clip.id, clip.start_char, clip.end_char, transcript.transcription, transcript.words]);
 
     const transcriptContext = {
         transcript, setTranscript,

@@ -32,11 +32,29 @@ type VideoContextType = {
     setTime: SetState<number>,
 }
 
+// Default empty clip for context default value
+const defaultContextClip: Clip = {
+    id: "default-clip",
+    object: "clip",
+    created: Math.floor(Date.now() / 1000),
+    start_time: 0,
+    end_time: 0,
+    start_char: 0,
+    end_char: 0,
+    video_id: video_data.id,
+    favorited: false,
+    deleted: false,
+    scores: {
+        embedding_norm: 0
+    },
+    title: video_data.title,
+};
+
 export const VideoContext = createContext<VideoContextType>({
     videoPlayer: { current: null },
-    clip: video_data.clips[0],
+    clip: defaultContextClip,
     setClip: async () => undefined,
-    clips: video_data.clips,
+    clips: [],
     setClips: async () => undefined,
     video: video_data,
     setVideo: async () => undefined,
@@ -51,7 +69,27 @@ export const VideoContext = createContext<VideoContextType>({
 export function VideoProvider({ children }: { children: ReactNode }) {
     const videoPlayer = useRef<HTMLVideoElement | null>(null);
 
-    const initClip = filterClips(video_data.clips, intervals[0], transcript)[0];
+    // Create default empty clip if no clips available
+    const defaultClip: Clip = {
+        id: "default-clip",
+        object: "clip",
+        created: Math.floor(Date.now() / 1000),
+        start_time: 0,
+        end_time: 0,
+        start_char: 0,
+        end_char: 0,
+        video_id: video_data.id,
+        favorited: false,
+        deleted: false,
+        scores: {
+            embedding_norm: 0
+        },
+        title: video_data.title,
+    };
+
+    const initClip = video_data.clips.length > 0 
+        ? (filterClips(video_data.clips, intervals[0], transcript)[0] || video_data.clips[0])
+        : defaultClip;
 
     const [clip, setClip] = useImmer<Clip>(initClip);
     const [video, setVideo] = useImmer<Video>(video_data);
@@ -59,7 +97,43 @@ export function VideoProvider({ children }: { children: ReactNode }) {
 
     const [muted, setMuted] = useState<boolean>(false);
     const [paused, setPaused] = useState<boolean>(true);
-    const [currentTime, setTime] = useState<number>(initClip.start_time);
+    const [currentTime, setTime] = useState<number>(initClip?.start_time || 0);
+
+    // Update clips when video changes
+    useEffect(() => {
+        if (video.clips.length === 0) {
+            setClips([]);
+            // Create a default clip that spans the entire video
+            const defaultClip: Clip = {
+                id: `default-${video.id}`,
+                object: "clip",
+                created: Math.floor(Date.now() / 1000),
+                start_time: 0,
+                end_time: video.metadata.duration,
+                start_char: 0,
+                end_char: 0,
+                video_id: video.id,
+                favorited: false,
+                deleted: false,
+                scores: {
+                    embedding_norm: 0
+                },
+                title: video.title,
+            };
+            setClip(defaultClip);
+            setTime(0);
+        } else {
+            setClips(video.clips);
+            const filtered = filterClips(video.clips, intervals[0], transcript);
+            if (filtered.length > 0) {
+                setClip(filtered[0]);
+                setTime(filtered[0].start_time);
+            } else if (video.clips.length > 0) {
+                setClip(video.clips[0]);
+                setTime(video.clips[0].start_time);
+            }
+        }
+    }, [video]);
 
     useEffect(() => {
         if (videoPlayer.current) {

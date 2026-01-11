@@ -30,4 +30,113 @@ git clone git@github.com:ClipsAI/demo.git
 npm i && npm run dev
 ```
 
+### Python API Setup
+
+The application uses a separate Python API server for YouTube downloads and ClipsAI processing. This keeps Python dependencies isolated from the Next.js application.
+
+#### 1. Setup Python API
+
+```bash
+# Navigate to python-api directory
+cd python-api
+
+# Run setup script (creates venv and installs dependencies)
+./setup.sh
+
+# Or manually:
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+#### 2. Install System Dependencies
+
+**Linux (Ubuntu/Debian):**
+```bash
+sudo apt install ffmpeg libmagic1
+```
+
+**macOS:**
+```bash
+brew install ffmpeg libmagic
+```
+
+**Windows:**
+- Download ffmpeg from [ffmpeg.org](https://ffmpeg.org/download.html)
+- libmagic usually comes with Python
+
+#### 3. Start Python API Server
+
+**Option 1: Using the start script (recommended)**
+```bash
+cd python-api
+./start.sh
+```
+
+**Option 2: Manual start**
+```bash
+cd python-api
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+python app.py
+```
+
+The Python API will run on `http://localhost:5000` by default.
+
+**Note:** Keep this terminal open while using the application.
+
+#### 4. Configure API URL (Optional)
+
+If the Python API runs on a different port or host, set the environment variable:
+
+```bash
+# In .env.local or environment
+PYTHON_API_URL=http://localhost:5000
+```
+
+#### 5. Verify Installation
+
+```bash
+# Check if Python API is running
+curl http://localhost:5000/health
+
+# Should return:
+# {"status": "ok", "clipsai_available": true, "yt_dlp_available": true}
+```
+
+### Usage
+
+**Important:** Make sure the Python API server is running before using YouTube import or clip generation features.
+
+1. **Start Python API** (in a separate terminal):
+   ```bash
+   cd python-api
+   source venv/bin/activate
+   python app.py
+   ```
+
+2. **Start Next.js** (in another terminal):
+   ```bash
+   npm run dev
+   ```
+
+3. **Upload a video file**: Click the "Upload" button to select a video file from your computer.
+
+4. **Import from YouTube**: 
+   - Click the "YouTube" button in the header
+   - Paste a YouTube URL (e.g., `https://www.youtube.com/watch?v=...`)
+   - Click "Process Video"
+   - The app will download the video, generate clips using ClipsAI, and update the interface automatically
+
+5. **Select Local Video**:
+   - Click the "Locais" button to see all locally stored videos
+   - Select a video and click "Gerar Cortes com ClipsAI" to generate clips
+
+### Features
+
+- Upload local video files
+- Import videos directly from YouTube
+- Automatic clip generation using ClipsAI
+- Video trimming and resizing
+- Transcript-based clip search
+
 
