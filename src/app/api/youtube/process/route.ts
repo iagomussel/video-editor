@@ -1,16 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import * as fs from 'fs';
 import * as path from 'path';
-import { registerVideo } from '@/app/api/video/[id]/route';
+import { registerVideo, getVideosDir } from '@/lib/video-storage';
 import { processYouTubeVideo } from '@/lib/python-api';
 
-// Directory to store processed videos (persist across requests)
-const VIDEOS_DIR = path.join(process.cwd(), '.next', 'videos');
+// Get videos directory
+const VIDEOS_DIR = getVideosDir();
 
 // Ensure videos directory exists
 if (!fs.existsSync(VIDEOS_DIR)) {
     fs.mkdirSync(VIDEOS_DIR, { recursive: true });
 }
+
+// Increase timeout for video processing (default is 10s, we need more for long videos)
+export const maxDuration = 300; // 5 minutes
 
 export async function POST(request: NextRequest) {
     let tempVideoPath: string | null = null;
@@ -37,11 +40,30 @@ export async function POST(request: NextRequest) {
 
         // Call Python API to process YouTube video
         console.log('Calling Python API to process YouTube video...');
-        const pythonResult = await processYouTubeVideo(url);
+        let pythonResult;
+        try {
+            pythonResult = await processYouTubeVideo(url);
+        } catch (error: any) {
+            // Check if it's a connection error vs processing error
+            if (error.message && error.message.includes('Python API não está rodando')) {
+                return NextResponse.json(
+                    { 
+                        error: error.message,
+                        suggestion: 'Inicie o servidor Python: cd python-api && source venv/bin/activate && python app.py'
+                    },
+                    { status: 503 }
+                );
+            }
+            // Re-throw other errors to be handled below
+            throw error;
+        }
 
         if (pythonResult.error) {
             return NextResponse.json(
-                { error: pythonResult.error },
+                { 
+                    error: pythonResult.error,
+                    suggestion: pythonResult.suggestion || undefined
+                },
                 { status: 500 }
             );
         }
@@ -140,8 +162,33 @@ export async function POST(request: NextRequest) {
             );
         }
         
+        // Check for timeout errors
+        if (error.message && (error.message.includes('timeout') || error.message.includes('aborted'))) {
+            return NextResponse.json(
+                { 
+                    error: 'O processamento do vídeo está demorando muito. O servidor Python pode estar processando. Tente novamente em alguns instantes.',
+                    suggestion: 'Vídeos longos podem levar vários minutos para processar. Verifique os logs do servidor Python.'
+                },
+                { status: 504 }
+            );
+        }
+        
+        // Check for ClipsAI installation errors
+        if (error.message && (error.message.includes('ClipsAI') || error.message.includes('clipsai') || error.message.includes('No module named'))) {
+            return NextResponse.json(
+                { 
+                    error: error.message,
+                    suggestion: 'Instale o ClipsAI: cd python-api && source venv/bin/activate && pip install clipsai'
+                },
+                { status: 500 }
+            );
+        }
+        
         return NextResponse.json(
-            { error: error.message || 'Failed to process video' },
+            { 
+                error: error.message || 'Failed to process video',
+                suggestion: 'Verifique os logs do servidor Python para mais detalhes.'
+            },
             { status: 500 }
         );
     }

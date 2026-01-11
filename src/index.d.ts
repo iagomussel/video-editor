@@ -39,6 +39,7 @@ type Video = {
 		duration: number,
 		file_size: number,
 		mime_type: string,
+		clips_count?: number, // Optional: number of clips generated
 	},
 	source: string,
 	status: string,

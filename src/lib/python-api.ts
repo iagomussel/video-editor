@@ -9,28 +9,42 @@ export async function callPythonAPI(endpoint: string, options: RequestInit = {})
     const url = `${PYTHON_API_URL}${endpoint}`;
     
     try {
+        // Build headers - don't set Content-Type for FormData (browser will set it with boundary)
+        const headers: Record<string, string> = { ...options.headers as Record<string, string> };
+        if (!(options.body instanceof FormData)) {
+            headers['Content-Type'] = 'application/json';
+        }
+        
         const response = await fetch(url, {
             ...options,
-            headers: {
-                'Content-Type': 'application/json',
-                ...options.headers,
-            },
+            headers,
         });
 
         if (!response.ok) {
             const error = await response.json().catch(() => ({ error: 'Unknown error' }));
+            // Don't treat API errors as "server not running" - these are processing errors
             throw new Error(error.error || `API request failed: ${response.statusText}`);
         }
 
         return await response.json();
     } catch (error: any) {
-        // Check if it's a connection error
-        if (error.message.includes('fetch failed') || error.message.includes('ECONNREFUSED')) {
+        // Only treat actual connection errors as "server not running"
+        // Check for network-level errors, not API errors
+        if (
+            error.message && (
+                error.message.includes('fetch failed') || 
+                error.message.includes('ECONNREFUSED') ||
+                error.message.includes('NetworkError') ||
+                error.message.includes('Failed to fetch') ||
+                (error.name === 'TypeError' && error.message.includes('fetch'))
+            )
+        ) {
             throw new Error(
                 'Python API não está rodando. ' +
                 'Por favor, inicie o servidor Python: cd python-api && source venv/bin/activate && python app.py'
             );
         }
+        // Re-throw other errors (processing errors, API errors, etc.)
         throw error;
     }
 }
@@ -76,12 +90,22 @@ export async function generateClipsFromVideo(videoFile: File, videoId: string, t
 
         return await response.json();
     } catch (error: any) {
-        if (error.message.includes('fetch failed') || error.message.includes('ECONNREFUSED')) {
+        // Only treat actual connection errors as "server not running"
+        if (
+            error.message && (
+                error.message.includes('fetch failed') || 
+                error.message.includes('ECONNREFUSED') ||
+                error.message.includes('NetworkError') ||
+                error.message.includes('Failed to fetch') ||
+                (error.name === 'TypeError' && error.message.includes('fetch'))
+            )
+        ) {
             throw new Error(
                 'Python API não está rodando. ' +
                 'Por favor, inicie o servidor Python: cd python-api && source venv/bin/activate && python app.py'
             );
         }
+        // Re-throw other errors (processing errors, API errors, etc.)
         throw error;
     }
 }

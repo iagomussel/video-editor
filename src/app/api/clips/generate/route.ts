@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateClipsFromVideo } from '@/lib/python-api';
 
+// Increase timeout for video processing (default is 10s, we need more for long videos)
+export const maxDuration = 300; // 5 minutes
+
 export async function POST(request: NextRequest) {
     try {
         const formData = await request.formData();

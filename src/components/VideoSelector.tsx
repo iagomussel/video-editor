@@ -115,7 +115,7 @@ export function VideoSelector({
                 metadata: {
                     ...tempVideo.metadata,
                     duration: clipsData.metadata?.duration || 0,
-                    clips_count: clipsData.metadata?.clips_count || 0,
+                    clips_count: clipsData.metadata?.clips_count,
                 },
             };
 

@@ -88,46 +88,106 @@ export function Header({ setInterval }: { setInterval: SetState<Interval> }) {
         if (!youtubeUrl.trim()) return;
 
         setIsProcessing(true);
-        setProcessingStatus('Downloading video from YouTube...');
+        setProcessingStatus('Iniciando processamento...');
 
         try {
-            const response = await fetch('/api/youtube/process', {
+            // Step 1: Start async processing (clips will be filtered to < 30 seconds)
+            const startResponse = await fetch('/api/youtube/process/start', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ url: youtubeUrl }),
+                body: JSON.stringify({ 
+                    url: youtubeUrl,
+                    max_duration: 30.0  // Filter clips to be less than 30 seconds
+                }),
             });
 
-            if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.error || 'Failed to process YouTube video');
+            if (!startResponse.ok) {
+                const error = await startResponse.json();
+                throw new Error(error.error || 'Failed to start processing');
             }
 
-            setProcessingStatus('Generating clips with ClipsAI...');
-            const data = await response.json();
-
-            // Update video
-            setVideo(data.video);
+            const { job_id } = await startResponse.json();
             
-            // Update clips
-            if (data.video.clips && data.video.clips.length > 0) {
-                setClips(data.video.clips);
-            }
+            // Step 2: Poll for status
+            const pollStatus = async (): Promise<void> => {
+                const maxAttempts = 600; // 10 minutes max (1 second intervals)
+                let attempts = 0;
+                
+                const poll = async (): Promise<void> => {
+                    if (attempts >= maxAttempts) {
+                        throw new Error('Processamento demorou muito tempo. Tente novamente.');
+                    }
+                    
+                    attempts++;
+                    
+                    try {
+                        const statusResponse = await fetch(`/api/youtube/process/status/${job_id}`);
+                        
+                        if (!statusResponse.ok) {
+                            throw new Error('Failed to get job status');
+                        }
+                        
+                        const status = await statusResponse.json();
+                        
+                        // Update status message
+                        if (status.message) {
+                            setProcessingStatus(`${status.message} (${status.progress}%)`);
+                        }
+                        
+                        if (status.status === 'completed') {
+                            // Step 3: Get result
+                            setProcessingStatus('Finalizando...');
+                            const resultResponse = await fetch(`/api/youtube/process/result/${job_id}`);
+                            
+                            if (!resultResponse.ok) {
+                                throw new Error('Failed to get job result');
+                            }
+                            
+                            const data = await resultResponse.json();
 
-            // Update transcript
-            if (data.transcript) {
-                setTranscript(data.transcript);
-            }
+                            // Update video
+                            setVideo(data.video);
+                            
+                            // Update clips
+                            if (data.video.clips && data.video.clips.length > 0) {
+                                setClips(data.video.clips);
+                            }
 
-            setProcessingStatus('Complete!');
-            setShowYoutubeInput(false);
-            setYoutubeUrl('');
+                            // Update transcript
+                            if (data.transcript) {
+                                setTranscript(data.transcript);
+                            }
+
+                            setProcessingStatus('Complete!');
+                            setShowYoutubeInput(false);
+                            setYoutubeUrl('');
+                            
+                            // Clear status after a moment
+                            setTimeout(() => {
+                                setProcessingStatus('');
+                                setIsProcessing(false);
+                            }, 2000);
+                        } else if (status.status === 'failed') {
+                            throw new Error(status.error || status.message || 'Processing failed');
+                        } else {
+                            // Continue polling
+                            setTimeout(poll, 1000); // Poll every 1 second
+                        }
+                    } catch (error: any) {
+                        if (error.message && !error.message.includes('Failed to get')) {
+                            throw error;
+                        }
+                        // Retry on network errors
+                        setTimeout(poll, 2000);
+                    }
+                };
+                
+                await poll();
+            };
             
-            // Clear status after a moment
-            setTimeout(() => {
-                setProcessingStatus('');
-            }, 2000);
+            await pollStatus();
         } catch (error: any) {
             console.error('Error processing YouTube video:', error);
             const errorMessage = error.message || 'Failed to process YouTube video';
@@ -147,7 +207,6 @@ export function Header({ setInterval }: { setInterval: SetState<Interval> }) {
                 alert(`Erro: ${errorMessage}`);
             }
             setProcessingStatus('');
-        } finally {
             setIsProcessing(false);
         }
     };
