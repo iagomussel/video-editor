@@ -44,7 +44,13 @@ export function getVideoPath(id: string): string | null {
     if (fs.existsSync(VIDEOS_DIR)) {
         try {
             const files = fs.readdirSync(VIDEOS_DIR);
-            const videoFile = files.find(file => file.startsWith(id));
+            // Try to find file that starts with id (old format) or ends with -id.ext (new format with title)
+            const videoFile = files.find(file => {
+                const ext = path.extname(file);
+                const basename = path.basename(file, ext);
+                // Match files that start with id (old format) or end with -id (new format: title-id.ext)
+                return file.startsWith(id) || basename.endsWith(`-${id}`) || basename === id;
+            });
             if (videoFile) {
                 const filePath = path.join(VIDEOS_DIR, videoFile);
                 // Re-register in cache

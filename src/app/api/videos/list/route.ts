@@ -31,8 +31,15 @@ export async function GET(request: NextRequest) {
                 const videoExtensions = ['.mp4', '.webm', '.mkv', '.mov', '.avi'];
                 
                 if (videoExtensions.includes(ext)) {
-                    // Extract video ID from filename (format: videoId.ext)
-                    const videoId = path.basename(file, ext);
+                    // Extract video ID from filename
+                    // Format can be: videoId.ext (old) or title-videoId.ext (new)
+                    const basename = path.basename(file, ext);
+                    // If filename contains a hyphen, assume format is title-videoId
+                    // Extract the part after the last hyphen as videoId
+                    // Otherwise, use the whole basename as videoId (old format)
+                    const videoId = basename.includes('-') 
+                        ? basename.substring(basename.lastIndexOf('-') + 1)
+                        : basename;
                     
                     const mimeTypes: Record<string, string> = {
                         '.mp4': 'video/mp4',

@@ -75,28 +75,29 @@ export async function POST(request: NextRequest) {
         const videoTitle = pythonResult.video.title || 'Downloaded Video';
         const videoExt = path.extname(tempVideoPath);
         
-        // Sanitize video title for filename (remove invalid characters, limit length)
+        // Sanitize video title for filename (normalize and remove invalid characters)
         const sanitizedTitle = videoTitle
+            .normalize('NFD') // Normalize to decomposed form (é -> e + ´)
+            .replace(/[\u0300-\u036f]/g, '') // Remove diacritics (accents)
             .replace(/[^a-zA-Z0-9\s\-_]/g, '') // Remove special characters except spaces, hyphens, underscores
             .replace(/\s+/g, '-') // Replace spaces with hyphens
-            .substring(0, 100) // Limit length
+            .replace(/-+/g, '-') // Replace multiple hyphens with single hyphen
+            .replace(/^-|-$/g, '') // Remove leading/trailing hyphens
+            .substring(0, 80) // Limit length (leave room for videoId)
             .trim();
         
-        // Use sanitized title as filename, with videoId as fallback
-        const filename = sanitizedTitle || videoId;
-        const persistentVideoPath = path.join(VIDEOS_DIR, `${filename}${videoExt}`);
-        
-        // If file already exists, append videoId to make it unique
-        let finalPath = persistentVideoPath;
-        if (fs.existsSync(finalPath)) {
-            finalPath = path.join(VIDEOS_DIR, `${filename}-${videoId}${videoExt}`);
-        }
+        // Use format: {title}-{videoId}.ext to ensure videoId is always in filename
+        // This allows the file to be found after server restarts
+        const filename = sanitizedTitle 
+            ? `${sanitizedTitle}-${videoId}`
+            : videoId;
+        const finalPath = path.join(VIDEOS_DIR, `${filename}${videoExt}`);
         
         // Copy video to persistent location
         fs.copyFileSync(tempVideoPath, finalPath);
         
         // Register video for serving
-        registerVideo(videoId, persistentVideoPath);
+        registerVideo(videoId, finalPath);
         
         // Create URL to serve the video
         const videoUrl = `/api/video/${videoId}`;
