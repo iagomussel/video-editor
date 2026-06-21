@@ -252,6 +252,90 @@ except ImportError:
     print("Warning: yt-dlp not installed. Install with: pip install yt-dlp", file=sys.stderr)
 
 
+# Filler words to detect and remove
+FILLER_WORDS = {'uh', 'um', 'uhm', 'ahm', 'er', 'eh', 'ah', 'like', 'you know', 'i mean'}
+
+def _is_filler_word(text: str) -> bool:
+    """Check if a word is a filler word (case-insensitive)."""
+    normalized = text.lower().strip().strip('.,!?;:')
+    return normalized in FILLER_WORDS
+
+def _remove_silences_and_fillers(words: list, silence_threshold: float = 0.3) -> list:
+    """
+    Remove silence intervals and filler words from word-level transcript.
+    
+    Args:
+        words: List of word objects with start_time, end_time, text
+        silence_threshold: Minimum gap (seconds) to consider as silence
+        
+    Returns:
+        List of non-silence, non-filler word segments with adjusted timestamps
+    """
+    if not words:
+        return []
+    
+    result_segments = []
+    current_segment_start = None
+    current_segment_words = []
+    
+    for i, word in enumerate(words):
+        # Extract word text
+        word_text = _get_word_text(word)
+        
+        # Skip filler words
+        if _is_filler_word(word_text):
+            continue
+        
+        # Get timing
+        try:
+            word_start = float(getattr(word, 'start_time', 0) if not isinstance(word, dict) else word.get('start_time', 0))
+            word_end = float(getattr(word, 'end_time', 0) if not isinstance(word, dict) else word.get('end_time', 0))
+        except (ValueError, TypeError):
+            continue
+        
+        # Skip empty words
+        if not word_text.strip():
+            continue
+        
+        # Check for silence gap before this word
+        is_silence = False
+        if i > 0 and current_segment_words:
+            try:
+                prev_word = words[i - 1]
+                prev_end = float(getattr(prev_word, 'end_time', 0) if not isinstance(prev_word, dict) else prev_word.get('end_time', 0))
+                gap = word_start - prev_end
+                if gap >= silence_threshold:
+                    is_silence = True
+            except (ValueError, TypeError):
+                pass
+        
+        if is_silence:
+            # Save current segment if we have words
+            if current_segment_words:
+                result_segments.append({
+                    'start_time': current_segment_start,
+                    'end_time': current_segment_words[-1].get('end_time', word_start),
+                    'words': current_segment_words
+                })
+            # Start new segment
+            current_segment_start = word_start
+            current_segment_words = [word]
+        else:
+            if current_segment_start is None:
+                current_segment_start = word_start
+            current_segment_words.append(word)
+    
+    # Don't forget the last segment
+    if current_segment_words and current_segment_start is not None:
+        result_segments.append({
+            'start_time': current_segment_start,
+            'end_time': current_segment_words[-1].get('end_time', current_segment_start),
+            'words': current_segment_words
+        })
+    
+    return result_segments
+
+
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint"""
@@ -977,6 +1061,159 @@ def process_youtube_sync():
             'error': str(e),
             'traceback': error_trace
         }), 500
+
+
+@app.route('/clips/refine', methods=['POST'])
+def refine_clips():
+    """
+    Refine clips by removing silences and filler words.
+    
+    Accepts:
+        {
+            "clips": [...],           // Array of clip objects with start_time, end_time
+            "words": [...],           // Word-level transcript with timing data
+            "remove_silences": true,  // Whether to remove silence intervals
+            "remove_fillers": true,   // Whether to remove filler words
+            "silence_threshold": 0.3  // Minimum gap (seconds) to consider as silence
+        }
+    
+    Returns:
+        {
+            "refined_clips": [...],   // Clips with adjusted timestamps
+            "removed_segments": [...], // Info about what was removed
+            "original_duration": ...,  // Total original clip duration
+            "refined_duration": ...    // Total refined clip duration
+        }
+    """
+    data = request.get_json()
+    
+    if not data:
+        return jsonify({'error': 'Request body is required'}), 400
+    
+    clips = data.get('clips', [])
+    words = data.get('words', [])
+    remove_silences = data.get('remove_silences', True)
+    remove_fillers = data.get('remove_fillers', True)
+    silence_threshold = float(data.get('silence_threshold', 0.3))
+    
+    if not clips:
+        return jsonify({'error': 'Clips array is required'}), 400
+    
+    if not words:
+        # Return clips unchanged if no word data
+        return jsonify({
+            'refined_clips': clips,
+            'removed_segments': [],
+            'original_duration': sum(c.get('end_time', 0) - c.get('start_time', 0) for c in clips),
+            'refined_duration': sum(c.get('end_time', 0) - c.get('start_time', 0) for c in clips),
+        })
+    
+    # Filter words for each clip and adjust timestamps
+    refined_clips = []
+    removed_segments = []
+    total_original_duration = 0
+    total_refined_duration = 0
+    
+    for clip in clips:
+        clip_start = float(clip.get('start_time', 0))
+        clip_end = float(clip.get('end_time', 0))
+        original_duration = clip_end - clip_start
+        total_original_duration += original_duration
+        
+        # Filter words within this clip
+        clip_words = []
+        for word in words:
+            word_start = float(word.get('start_time', 0))
+            word_end = float(word.get('end_time', 0))
+            word_text = word.get('text', '')
+            
+            # Skip words outside clip bounds
+            if word_end <= clip_start or word_start >= clip_end:
+                continue
+            
+            # Skip filler words if requested
+            if remove_fillers and _is_filler_word(word_text):
+                removed_segments.append({
+                    'type': 'filler',
+                    'word': word_text,
+                    'start_time': word_start,
+                    'end_time': word_end,
+                    'clip_id': clip.get('id'),
+                })
+                continue
+            
+            clip_words.append(word)
+        
+        # Find silence gaps within clip
+        silence_gaps = []
+        for i in range(1, len(clip_words)):
+            prev_end = float(clip_words[i-1].get('end_time', 0))
+            curr_start = float(clip_words[i].get('start_time', 0))
+            gap = curr_start - prev_end
+            
+            if gap >= silence_threshold:
+                silence_gaps.append({
+                    'start': prev_end,
+                    'end': curr_start,
+                    'duration': gap,
+                })
+                removed_segments.append({
+                    'type': 'silence',
+                    'start_time': prev_end,
+                    'end_time': curr_start,
+                    'duration': gap,
+                    'clip_id': clip.get('id'),
+                })
+        
+        # Calculate refined timestamps
+        # For simplicity, we'll adjust the end_time based on gaps removed
+        refined_end = clip_end
+        total_removed = sum(g.get('duration', 0) for g in silence_gaps) if remove_silences else 0
+        
+        # Count removed filler words
+        filler_count = sum(
+            1 for seg in removed_segments 
+            if seg.get('type') == 'filler' and seg.get('clip_id') == clip.get('id')
+        )
+        
+        # Create refined clip with metadata
+        refined_clip = {
+            **clip,
+            'refined': True,
+            'original_start_time': clip_start,
+            'original_end_time': clip_end,
+            'start_time': clip_start,  # Keep start time the same
+            'end_time': clip_end,      # We'll keep end time but mark the removed content
+            'removed_silences': silence_gaps if remove_silences else [],
+            'removed_filler_count': filler_count if remove_fillers else 0,
+            'total_removed_seconds': total_removed,
+        }
+        
+        # Adjust end time to reflect removed silences
+        if remove_silences and silence_gaps:
+            # Find words that should be the new end (before silences)
+            new_end = clip_end
+            for gap in sorted(silence_gaps, key=lambda x: x['start']):
+                if gap['end'] < new_end:
+                    new_end = gap['start']
+            refined_clip['end_time'] = new_end
+            refined_clip['original_end_time'] = clip_end
+        
+        total_refined_duration += refined_clip['end_time'] - refined_clip['start_time']
+        refined_clips.append(refined_clip)
+    
+    return jsonify({
+        'refined_clips': refined_clips,
+        'removed_segments': removed_segments,
+        'original_duration': total_original_duration,
+        'refined_duration': total_refined_duration,
+        'stats': {
+            'total_clips': len(clips),
+            'silences_removed': sum(1 for s in removed_segments if s.get('type') == 'silence'),
+            'fillers_removed': sum(1 for s in removed_segments if s.get('type') == 'filler'),
+            'silence_threshold_seconds': silence_threshold,
+        }
+    })
 
 
 if __name__ == '__main__':

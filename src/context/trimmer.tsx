@@ -1,5 +1,5 @@
 // React
-import { createContext, useState, ReactNode } from 'react'
+import { createContext, useState, ReactNode, useEffect } from 'react'
 
 // Hooks
 import { useVideoContext } from '@/hooks/video'
@@ -20,6 +20,8 @@ type TrimmerContextType = {
     setEndRange: SetState<number>,
     trimming: boolean,
     setTrimming: SetState<boolean>,
+    // Track if current clip was refined
+    refinedClip: boolean,
 }
 
 export const TrimmerContext = createContext<TrimmerContextType>({
@@ -37,6 +39,7 @@ export const TrimmerContext = createContext<TrimmerContextType>({
     setEndRange: () => { },
     trimming: false,
     setTrimming: () => { },
+    refinedClip: false,
 });
 
 export function TrimmerProvider({ children }: { children: ReactNode }) {
@@ -50,6 +53,18 @@ export function TrimmerProvider({ children }: { children: ReactNode }) {
     const [endRange, setEndRange] = useState<number>(100);
     const [trimming, setTrimming] = useState<boolean>(false);
 
+    // Track if the current clip was refined
+    const [refinedClip, setRefinedClip] = useState<boolean>(clip.refined || false);
+
+    // Update trimmer values when clip changes
+    useEffect(() => {
+        setStartTime(clip.start_time);
+        setEndTime(clip.end_time);
+        setTrimStartTime(clip.start_time);
+        setTrimEndTime(clip.end_time);
+        setRefinedClip(clip.refined || false);
+    }, [clip.id, clip.start_time, clip.end_time, clip.refined]);
+
     const trimContext = {
         startTime, setStartTime,
         endTime, setEndTime,
@@ -58,6 +73,7 @@ export function TrimmerProvider({ children }: { children: ReactNode }) {
         startRange, setStartRange,
         endRange, setEndRange,
         trimming, setTrimming,
+        refinedClip,
     };
 
     return (

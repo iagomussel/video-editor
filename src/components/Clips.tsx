@@ -4,6 +4,7 @@ import { VideoPlayer } from '@/components/Video'
 import { OptionsMenu, Option } from '@/components/Options'
 import { RenameModal, DeleteModal } from '@/components/Modal'
 import { ResizeToggle } from '@/components/Resize'
+import { RefinePanel } from '@/components/Refine'
 
 // Hooks
 import { useVideo } from '@/hooks/video'
@@ -32,6 +33,7 @@ export function ClipEditor({ interval }: { interval: Interval }) {
             <div className="flex w-full mb-4 space-x-4">
                 <Search setQuery={setQuery} placeholder="Search using keywords" />
                 <ResizeToggle />
+                <RefinePanel />
             </div>
             <div className="grid gap-x-6 grid-cols-3">
                 <Clips query={query} interval={interval} />
@@ -159,6 +161,12 @@ function ClipInfo({ clip, selected }: { clip: Clip; selected: boolean }) {
     const endTime = convertToTime(clip.end_time);
     const duration = convertToDuration(Math.round(clip.end_time - clip.start_time))
 
+    // Calculate refined info
+    const hasRefinement = clip.refined || clip.removed_silences?.length || clip.removed_filler_count;
+    const refinedDuration = clip.total_removed_seconds 
+        ? convertToDuration(Math.round((clip.end_time - clip.start_time + clip.total_removed_seconds)))
+        : null;
+
     return (
         <div
             className="flex-1 flex-col justify-between
@@ -182,6 +190,16 @@ function ClipInfo({ clip, selected }: { clip: Clip; selected: boolean }) {
                 )}>
                     {clip.title}
                 </p>
+                {hasRefinement && (
+                    <span className={classNames(
+                        "inline-flex items-center px-1.5 py-0.5 rounded text-[0.65rem] font-medium",
+                        selected 
+                            ? 'bg-blue-700 text-white' 
+                            : 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200'
+                    )}>
+                        Refined
+                    </span>
+                )}
             </div>
             <span className={classNames(
                 "inline",
@@ -192,6 +210,14 @@ function ClipInfo({ clip, selected }: { clip: Clip; selected: boolean }) {
                 <span>{duration}</span>
                 {" "}<span aria-hidden="true">|</span>{" "}
                 <span>{`${startTime} - ${endTime}`}</span>
+                {hasRefinement && (
+                    <>
+                        {" "}<span aria-hidden="true">|</span>{" "}
+                        <span className="text-green-600 dark:text-green-400" title="Time saved by removing silences/fillers">
+                            -{clip.total_removed_seconds?.toFixed(1) || '?'}s
+                        </span>
+                    </>
+                )}
             </span>
         </div>
     );
@@ -210,6 +236,75 @@ function OptionsButton({
     setOpenDeleteModal: SetState<boolean>,
 }) {
     const { setClips } = useVideo();
+    const { transcript } = useTranscript();
+
+    const handleRefineClip = async (event: any) => {
+        event.stopPropagation();
+        
+        try {
+            // Prepare words from transcript
+            const words = transcript.words?.map(w => ({
+                start_time: w.start_time,
+                end_time: w.end_time,
+                text: transcript.transcription?.substring(w.start_char, w.end_char) || ''
+            })) || []
+            
+            const response = await fetch('/api/clips/refine', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    clips: [clip],
+                    words,
+                    remove_silences: true,
+                    remove_fillers: true,
+                    silence_threshold: 0.3,
+                }),
+            })
+            
+            if (!response.ok) {
+                const error = await response.json()
+                throw new Error(error.error || 'Failed to refine clip')
+            }
+            
+            const result = await response.json()
+            
+            if (result.refined_clips?.length > 0) {
+                const refinedClip = result.refined_clips[0]
+                setClips((draftClips: Clip[]) => {
+                    const index = draftClips.findIndex((draft: Clip) => draft.id === clip.id)
+                    if (index !== -1) {
+                        draftClips[index] = {
+                            ...draftClips[index],
+                            start_time: refinedClip.start_time,
+                            end_time: refinedClip.end_time,
+                            refined: true,
+                            removed_silences: refinedClip.removed_silences,
+                            removed_filler_count: refinedClip.removed_filler_count,
+                            total_removed_seconds: refinedClip.total_removed_seconds,
+                        }
+                    }
+                })
+            }
+        } catch (error: any) {
+            console.error('Error refining clip:', error)
+            alert(`Error refining clip: ${error.message}`)
+        }
+    }
+
+    const handleResetClip = (event: any) => {
+        event.stopPropagation();
+        setClips((draftClips: Clip[]) => {
+            const index = draftClips.findIndex((draft: Clip) => draft.id === clip.id)
+            if (index !== -1 && draftClips[index].original_start_time !== undefined) {
+                draftClips[index].start_time = draftClips[index].original_start_time!
+                draftClips[index].end_time = draftClips[index].original_end_time!
+                draftClips[index].refined = false
+                delete draftClips[index].removed_silences
+                delete draftClips[index].removed_filler_count
+                delete draftClips[index].total_removed_seconds
+            }
+        })
+    }
 
     const options: Option[] = [
         {
@@ -228,6 +323,17 @@ function OptionsButton({
         },
         {
             id: 2,
+            name: clip.refined ? "Reset Refinement" : "Remove Silences & Fillers",
+            icon: (
+                <svg className="mr-2 text-blue-600" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                        d="M19 6a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V6z" />
+                </svg>
+            ),
+            handleClick: clip.refined ? handleResetClip : handleRefineClip,
+        },
+        {
+            id: 3,
             name: "Rename",
             icon: <EditNote className="mr-2 text-blue-600" />,
             handleClick: (event: any) => {
@@ -236,7 +342,7 @@ function OptionsButton({
             }
         },
         {
-            id: 3,
+            id: 4,
             name: "Delete",
             icon: <Delete fontSize="small" className="mt-0.5 mr-2 text-blue-600" />,
             handleClick: (event: any) => {

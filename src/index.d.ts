@@ -20,6 +20,13 @@ type Clip = {
         embedding_norm: number
     },
     title: string,
+    // Refinement properties
+    refined?: boolean,
+    original_start_time?: number,
+    original_end_time?: number,
+    removed_silences?: Array<{ start: number; end: number; duration: number }>,
+    removed_filler_count?: number,
+    total_removed_seconds?: number,
 }
 
 type Interval = {
