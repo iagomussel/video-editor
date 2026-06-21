@@ -116,3 +116,65 @@ export async function processYouTubeVideo(url: string) {
         body: JSON.stringify({ url }),
     });
 }
+
+export interface RefineClipsOptions {
+    remove_silences?: boolean;
+    remove_fillers?: boolean;
+    silence_threshold?: number;
+}
+
+export interface RefinedClip {
+    id: string;
+    start_time: number;
+    end_time: number;
+    original_start_time?: number;
+    original_end_time?: number;
+    refined?: boolean;
+    removed_silences?: Array<{ start: number; end: number; duration: number }>;
+    removed_filler_count?: number;
+    total_removed_seconds?: number;
+    // ... other clip properties
+}
+
+export interface RefineClipsResult {
+    refined_clips: RefinedClip[];
+    removed_segments: Array<{
+        type: 'silence' | 'filler';
+        start_time: number;
+        end_time: number;
+        clip_id?: string;
+        duration?: number;
+    }>;
+    original_duration: number;
+    refined_duration: number;
+    stats: {
+        total_clips: number;
+        silences_removed: number;
+        fillers_removed: number;
+        silence_threshold_seconds: number;
+    };
+    error?: string;
+}
+
+export async function refineClips(
+    clips: RefinedClip[],
+    words: Array<{
+        start_time: number;
+        end_time: number;
+        text: string;
+    }>,
+    options: RefineClipsOptions = {}
+): Promise<RefineClipsResult> {
+    const { remove_silences = true, remove_fillers = true, silence_threshold = 0.3 } = options;
+
+    return callPythonAPI('/clips/refine', {
+        method: 'POST',
+        body: JSON.stringify({
+            clips,
+            words,
+            remove_silences,
+            remove_fillers,
+            silence_threshold,
+        }),
+    });
+}
