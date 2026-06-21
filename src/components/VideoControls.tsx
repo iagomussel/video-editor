@@ -1,9 +1,11 @@
 // React
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 
 // Components
 import { ThemeToggle } from '@/components/Theme'
 import { ToolTipButton } from '@/components/ToolTip'
+import { PreviewExportButton } from '@/components/ExportPreview'
+import { ExportPreviewModal } from '@/components/ExportPreview'
 
 // Hooks
 import { useVideo } from '@/hooks/video'
@@ -37,22 +39,30 @@ export function VideoControls({
     currentTime: number,
     duration: number
 }) {
+    const [previewOpen, setPreviewOpen] = useState(false);
 
     return (
-        <div className="grid grid-cols-3 mt-3 mb-1">
-            <div className="flex place-self-start">
-                <PlayButton />
-                <VolumeButton />
+        <>
+            <div className="grid grid-cols-3 mt-3 mb-1">
+                <div className="flex place-self-start">
+                    <PlayButton />
+                    <VolumeButton />
+                </div>
+                <PlaybackTimer
+                    time={convertToTime(Math.max(0, currentTime))}
+                    duration={convertToTime(Math.round(duration))}
+                    className="place-self-center font-semibold"
+                />
+                <div className="flex place-self-end gap-2">
+                    <PreviewExportButton onClick={() => setPreviewOpen(true)} />
+                    <EditingControls />
+                </div>
             </div>
-            <PlaybackTimer
-                time={convertToTime(Math.max(0, currentTime))}
-                duration={convertToTime(Math.round(duration))}
-                className="place-self-center font-semibold"
+            <ExportPreviewModal
+                open={previewOpen}
+                setOpen={setPreviewOpen}
             />
-            <div className="flex place-self-end">
-                <EditingControls />
-            </div>
-        </div>
+        </>
     )
 }
 
