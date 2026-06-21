@@ -5,6 +5,7 @@ import { MutableRefObject, ReactNode } from 'react'
 import { Trimmer } from '@/components/Trimmer'
 import { ResizeContainer } from '@/components/Resize'
 import { VideoControls } from '@/components/VideoControls'
+import { SubtitleOverlay } from '@/components/SubtitleOverlay'
 
 // Hooks
 import { useResizer } from '@/hooks/resizer'
@@ -41,22 +42,25 @@ function Video() {
 
     return (
         <ResizeContainer>
-            <video
-                ref={videoPlayer}
-                onPlay={handlePlay}
-                onPause={handlePause}
-                onTimeUpdate={handleOnTimeUpdate}
-                className="absolute rounded-xl h-full top-0 left-0 object-cover"
-                src={video.source}
-                style={{
-                    minWidth: (resizeMode === "9:16") 
-                        ? `${extendedWidth}%` 
-                        : "100%",
-                    transform: (resizeMode === "9:16") 
-                        ? `translateX(${-resizeLeft}%)` 
-                        : undefined,
-                }}
-            />
+            <div className="relative rounded-xl overflow-hidden h-full w-full">
+                <video
+                    ref={videoPlayer}
+                    onPlay={handlePlay}
+                    onPause={handlePause}
+                    onTimeUpdate={handleOnTimeUpdate}
+                    className="absolute rounded-xl h-full top-0 left-0 object-cover"
+                    src={video.source}
+                    style={{
+                        minWidth: (resizeMode === "9:16") 
+                            ? `${extendedWidth}%` 
+                            : "100%",
+                        transform: (resizeMode === "9:16") 
+                            ? `translateX(${-resizeLeft}%)` 
+                            : undefined,
+                    }}
+                />
+                <SubtitleOverlay />
+            </div>
         </ResizeContainer>
     )
 }

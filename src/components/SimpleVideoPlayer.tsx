@@ -1,6 +1,7 @@
 'use client'
 
 import { useVideo } from '@/hooks/video';
+import { SubtitleOverlay } from '@/components/SubtitleOverlay';
 
 export function SimpleVideoPlayer() {
     const {
@@ -30,17 +31,20 @@ export function SimpleVideoPlayer() {
 
     return (
         <div className="rounded-lg border border-gray-200 dark:border-white/10 bg-black overflow-hidden">
-            <video
-                ref={videoPlayer}
-                src={video.source}
-                controls
-                playsInline
-                preload="metadata"
-                onPlay={handlePlay}
-                onPause={handlePause}
-                onTimeUpdate={handleOnTimeUpdate}
-                className="w-full h-[360px] object-contain bg-black"
-            />
+            <div className="relative">
+                <video
+                    ref={videoPlayer}
+                    src={video.source}
+                    controls
+                    playsInline
+                    preload="metadata"
+                    onPlay={handlePlay}
+                    onPause={handlePause}
+                    onTimeUpdate={handleOnTimeUpdate}
+                    className="w-full h-[360px] object-contain bg-black"
+                />
+                <SubtitleOverlay />
+            </div>
         </div>
     );
 }
