@@ -9,6 +9,7 @@ import { ThemeWatcher } from '@/components/Theme'
 // Contexts
 import { ResizerProvider } from '@/context/resizer'
 import { TranscriptProvider } from '@/context/transcript'
+import { SubtitleProvider } from '@/context/subtitle'
 import { TrimmerProvider } from '@/context/trimmer'
 import { VideoProvider } from '@/context/video'
 
@@ -22,11 +23,13 @@ export function Providers({ children }: { children: ReactNode }) {
             <ThemeWatcher />
             <VideoProvider>
                 <TranscriptProvider>
-                    <ResizerProvider>
-                        <TrimmerProvider>
-                            {children}
-                        </TrimmerProvider>
-                    </ResizerProvider>
+                    <SubtitleProvider>
+                        <ResizerProvider>
+                            <TrimmerProvider>
+                                {children}
+                            </TrimmerProvider>
+                        </ResizerProvider>
+                    </SubtitleProvider>
                 </TranscriptProvider>
             </VideoProvider>
         </ThemeProvider>

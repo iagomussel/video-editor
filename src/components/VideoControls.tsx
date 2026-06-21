@@ -5,6 +5,9 @@ import { useMemo } from 'react'
 import { ThemeToggle } from '@/components/Theme'
 import { ToolTipButton } from '@/components/ToolTip'
 
+// Contexts
+import { useSubtitles } from '@/context/subtitle'
+
 // Hooks
 import { useVideo } from '@/hooks/video'
 import { useResizer } from '@/hooks/resizer'
@@ -27,6 +30,7 @@ import {
     PlayCircleOutline,
     PauseCircleOutline,
     ContentCut as SplitIcon,
+    ClosedCaption as CCIcon,
 } from "@mui/icons-material"
 
 
@@ -71,6 +75,7 @@ function EditingControls() {
             ) : (
                 <div className="flex space-x-3">
                     {(resizeMode === "Edit") && <SplitButton />}
+                    <SubtitleToggle />
                     <ThemeToggle />
                 </div>
             )}
@@ -170,6 +175,27 @@ function VolumeButton() {
                 />
             )}
         </button>
+    )
+}
+
+function SubtitleToggle() {
+    const { showSubtitles, toggleSubtitles } = useSubtitles();
+
+    return (
+        <ToolTipButton
+            tooltipText={showSubtitles ? "Hide Subtitles" : "Show Subtitles"}
+            buttonClass="rounded hover:bg-gray-200"
+            tooltipClass="w-28 bottom-9 bg-blue-600"
+            OnClick={toggleSubtitles}
+        >
+            <CCIcon
+                sx={{ fontSize: 24 }}
+                className={showSubtitles
+                    ? "text-blue-600 dark:text-blue-400"
+                    : "text-blue-600 dark:text-white/90"
+                }
+            />
+        </ToolTipButton>
     )
 }
 
